@@ -1,0 +1,12 @@
+[workspace]
+members = ["winit", "model"]
+
+exclude = ["esp32", "ui"]
+
+[workspace.package]
+name = "slint-chat-esp32"
+version = "0.2.0"
+authors = ["Michael Winkelmann <michael@winkelmann.site>"]
+edition = "2021"
+resolver = "2"
+rust-version = "1.80"

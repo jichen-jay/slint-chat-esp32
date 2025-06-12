@@ -1,0 +1,22 @@
+
+/// The Base class is imported as Window from widgets.slint.
+import { AppWindow } from "widgets.slint";
+
+import { Switch, TabWidget, AboutSlint } from "std-widgets.slint";
+import { WifiNetworkPage } from "pages.slint";
+
+import { WifiNetwork } from "viewmodel.slint";
+
+export component MainWindow inherits AppWindow {
+    TabWidget {
+        Tab {
+            title: @tr("Wifi");
+        }
+
+        Tab {
+            title: @tr("About");
+
+            AboutSlint { }
+        }
+    }
+}
