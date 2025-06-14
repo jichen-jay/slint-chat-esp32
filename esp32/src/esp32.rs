@@ -1,9 +1,6 @@
-use std::cell::RefCell;
-
 extern crate alloc;
 
 #[allow(unused_imports)]
-use esp_idf_svc::hal::prelude::*;
 use esp_idf_svc::hal::spi::*;
 use esp_idf_svc::hal::gpio::*;
 use esp_idf_svc::hal::delay::*;
@@ -39,7 +36,6 @@ impl EspPlatform {
     pub fn new() -> std::boxed::Box<Self> {
         use esp_idf_svc::hal::prelude::*;
 
-        use esp_idf_svc::hal::prelude::*;
 
         let peripherals = Peripherals::take().unwrap();
 

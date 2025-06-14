@@ -5,7 +5,6 @@ slint::include_modules!();
 use log::info;
 use esp_idf_svc::wifi::ClientConfiguration;
 use embedded_svc::http::client::Client;
-use esp_idf_svc::io::Read;
 use esp_idf_svc::http::client::{Configuration as HttpConfig, EspHttpConnection};
 
 type Wifi = esp_idf_svc::wifi::BlockingWifi<esp_idf_svc::wifi::EspWifi<'static>>;
@@ -76,7 +75,6 @@ fn fetch_weather_simple() -> Result<(f64, f64, f64), Box<dyn std::error::Error>>
     if status != 200 {
         return Err(format!("HTTP error: {}", status).into());
     }
-    use embedded_svc::io::Read; 
     // Read response
     let mut buf = Vec::new();
     let mut temp_buf = [0u8; 256];
