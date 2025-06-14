@@ -247,43 +247,44 @@ impl slint::platform::Platform for EspPlatform {
         self.timer.now()
     }
 
-    fn run_event_loop(&self) -> Result<(), slint::PlatformError> {
-        // Create a buffer to draw the scene
-        use slint::platform::software_renderer::Rgb565Pixel;
-        let mut buffer = Vec::new();
-        buffer.resize(self.display_width * self.display_height, Rgb565Pixel(0x0));
+fn run_event_loop(&self) -> Result<(), slint::PlatformError> {
+    // Create a buffer to draw the scene
+    use slint::platform::software_renderer::Rgb565Pixel;
+    let mut buffer = Vec::new();
+    buffer.resize(self.display_width * self.display_height, Rgb565Pixel(0x0));
 
-        log::info!("Starting main event loop...");
+    log::info!("Starting main event loop...");
+    
+    let mut last_yield = std::time::Instant::now();
 
-        loop {
-            slint::platform::update_timers_and_animations();
+    loop {
+        slint::platform::update_timers_and_animations();
 
-            // No touch handling - just focus on display
+        // Draw the scene if something needs to be drawn
+        self.window.draw_if_needed(|renderer| {
+            // Render to buffer
+            let region = renderer.render(&mut buffer, self.display_width);
 
-            // Draw the scene if something needs to be drawn
-            self.window.draw_if_needed(|renderer| {
-                log::info!("Rendering frame...");
-                
-                // Render to buffer
-                let region = renderer.render(&mut buffer, self.display_width);
-                
-                // log::info!("Rendered {} regions", region.len());
-
-                // Send buffer to ST7789 display
-                for (origin, size) in region.iter() {
-                    log::info!("Updating region: {}x{} at ({}, {})", size.width, size.height, origin.x, origin.y);
-                    if let Err(e) = self.update_display_region(&origin, &size, &buffer) {
-                        log::error!("Failed to update display: {:?}", e);
-                    }
+            // Send buffer to ST7789 display
+            for (origin, size) in region.iter() {
+                if let Err(e) = self.update_display_region(&origin, &size, &buffer) {
+                    log::error!("Failed to update display: {:?}", e);
                 }
-            });
-
-            // Yield to prevent watchdog timeout
-            if !self.window.has_active_animations() {
-                esp_idf_svc::hal::task::do_yield();
             }
+        });
+
+        // Yield regularly to prevent watchdog timeout
+        if last_yield.elapsed() > std::time::Duration::from_millis(100) {
+            esp_idf_svc::hal::task::do_yield();
+            last_yield = std::time::Instant::now();
+        }
+        
+        // Sleep when idle to save CPU
+        if !self.window.has_active_animations() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
+}
 }
 
 impl EspPlatform {

@@ -4,6 +4,9 @@ slint::include_modules!();
 
 use log::info;
 use esp_idf_svc::wifi::ClientConfiguration;
+use embedded_svc::http::client::Client;
+use esp_idf_svc::io::Read;
+use esp_idf_svc::http::client::{Configuration as HttpConfig, EspHttpConnection};
 
 type Wifi = esp_idf_svc::wifi::BlockingWifi<esp_idf_svc::wifi::EspWifi<'static>>;
 
@@ -12,21 +15,6 @@ pub struct Model {
 }
 
 impl Model {
-    fn scan_wifi_networks(&self) -> Vec<WifiNetwork> {
-        self.wifi.borrow_mut().start().unwrap();
-        info!("Wifi started");
-
-        self.wifi
-            .borrow_mut()
-            .scan()
-            .unwrap()
-            .iter()
-            .map(|access_point| WifiNetwork {
-                ssid: slint::SharedString::from(access_point.ssid.to_string()),
-            })
-            .collect()
-    }
-    
     fn connect_to_wifi(&self) -> anyhow::Result<()> {
         info!("Connecting to WiFi...");
         
@@ -41,78 +29,86 @@ impl Model {
         self.wifi.borrow_mut().start()?;
         self.wifi.borrow_mut().connect()?;
         
-        // Wait for connection
+        // Wait for connection with timeout
+        let start = std::time::Instant::now();
+        while !self.wifi.borrow().is_connected()? {
+            if start.elapsed() > std::time::Duration::from_secs(10) {
+                return Err(anyhow::anyhow!("WiFi connection timeout"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        
+        // Wait for IP
         self.wifi.borrow_mut().wait_netif_up()?;
+        
+        // Wait a bit for network to stabilize
+        std::thread::sleep(std::time::Duration::from_secs(2));
         
         info!("WiFi connected!");
         Ok(())
     }
 }
 
-fn fetch_weather(lat: f64, lon: f64) -> Result<(f64, f64, f64), Box<dyn std::error::Error>> {
-    info!("Fetching weather for coordinates: {}, {}", lat, lon);
+fn fetch_weather_simple() -> Result<(f64, f64, f64), Box<dyn std::error::Error>> {
+    info!("Fetching weather data...");
     
-    let url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&current=temperature_2m,relative_humidity_2m,wind_speed_10m",
-        lat, lon
-    );
-    
-    info!("Making request to: {}", url);
-    
-    // Use a simpler HTTP approach without TLS for now
-    // The Open-Meteo API supports HTTP
-    let url = url.replace("https://", "http://");
-    
-    // Parse URL components
-    let (host, path) = if let Some(pos) = url.find('/') {
-        let (h, p) = url.split_at(pos);
-        (h.replace("http://", ""), p.to_string())
-    } else {
-        return Err("Invalid URL".into());
+    // Use a simple HTTP client
+    let config = HttpConfig {
+        crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
+        ..Default::default()
     };
     
-    // Create a TCP connection
-    use std::io::Write;
-    use std::net::TcpStream;
+    let connection = EspHttpConnection::new(&config)?;
+    let mut client = Client::wrap(connection);
+
+
+    // Use the exact URL that works
+    let url = "http://api.open-meteo.com/v1/forecast?latitude=43.45&longitude=-80.49&current=temperature_2m,relative_humidity_2m,wind_speed_10m";
     
-    let mut stream = TcpStream::connect(format!("{}:80", host))?;
+    info!("Making http request...");
+   let request = client.get(url)?;
     
-    // Send HTTP request
-    let request = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: ESP32-Weather-App/1.0\r\nConnection: close\r\n\r\n",
-        path, host
-    );
+    let mut response = request.submit()?;
     
-    stream.write_all(request.as_bytes())?;
+    let status = response.status();
+    info!("Response status: {}", status);
     
+    if status != 200 {
+        return Err(format!("HTTP error: {}", status).into());
+    }
+    use embedded_svc::io::Read; 
     // Read response
-    use std::io::Read;
-    let mut response = String::new();
-    stream.read_to_string(&mut response)?;
+    let mut buf = Vec::new();
+    let mut temp_buf = [0u8; 256];
     
-    // Find the JSON body (after the headers)
-    let body_start = response.find("\r\n\r\n").ok_or("Invalid response")? + 4;
-    let response_body = &response[body_start..];
+    loop {
+        match response.read(&mut temp_buf) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&temp_buf[..n]),
+            Err(e) => return Err(Box::new(e)),
+        }
+    }
     
-    info!("Received response body: {}", response_body);
+    let response_str = String::from_utf8_lossy(&buf);
+    info!("Response: {}", response_str);
     
-    // Parse JSON response
+    // Parse JSON
     use serde_json::Value;
-    let v: Value = serde_json::from_str(response_body)?;
+    let v: Value = serde_json::from_str(&response_str)?;
     
     let temp = v["current"]["temperature_2m"]
         .as_f64()
-        .ok_or("Missing temperature data")?;
+        .ok_or("Missing temperature")?;
     
     let humidity = v["current"]["relative_humidity_2m"]
         .as_f64()
-        .ok_or("Missing humidity data")?;
+        .ok_or("Missing humidity")?;
     
     let wind = v["current"]["wind_speed_10m"]
         .as_f64()
-        .ok_or("Missing wind speed data")?;
+        .ok_or("Missing wind speed")?;
     
-    info!("Parsed weather data - Temp: {}°C, Humidity: {}%, Wind: {} m/s", temp, humidity, wind);
+    info!("Weather: {}°C, {}%, {} m/s", temp, humidity, wind);
     
     Ok((temp, humidity, wind))
 }
@@ -135,45 +131,64 @@ impl App {
     /// Run the App
     fn run(self) -> anyhow::Result<()> {
         let ui_weak = self.ui.as_weak();
-        let ui_weak_weather = ui_weak.clone(); // Clone for weather callback
         let model_rc = std::rc::Rc::new(self.model);
         
-        // Set up WiFi scan callback
-        let model_clone = model_rc.clone();
-        self.ui.on_scan_wifi(move || {
-            let networks = model_clone.scan_wifi_networks();
-            let wifi_model = std::rc::Rc::new(slint::VecModel::from(networks));
-            ui_weak.unwrap().set_wifi_networks(wifi_model.into());
-        });
-        
-        // Set up weather fetch callback
-        let model_clone = model_rc.clone();
-        self.ui.on_fetch_weather(move || {
-            // First ensure WiFi is connected
-            if let Err(e) = model_clone.connect_to_wifi() {
-                info!("WiFi connection error: {:?}", e);
-                return;
+        // Connect to WiFi at startup
+        info!("Connecting to WiFi at startup...");
+        let wifi_connected = match model_rc.connect_to_wifi() {
+            Ok(_) => {
+                info!("WiFi connected successfully!");
+                true
             }
-            
-            // Kitchener, ON coordinates
-            let lat = 43.4516;
-            let lon = -80.4925;
-            
-            // Fetch weather
-            match fetch_weather(lat, lon) {
+            Err(e) => {
+                info!("WiFi connection failed: {:?}", e);
+                false
+            }
+        };
+        
+        if wifi_connected {
+            // Try to fetch weather immediately
+            match fetch_weather_simple() {
                 Ok((temp, humidity, wind)) => {
                     let weather_info = WeatherInfo {
                         temperature: temp as f32,
                         humidity: humidity as f32,
                         wind_speed: wind as f32,
                     };
-                    ui_weak_weather.unwrap().set_weather(weather_info);
+                    self.ui.set_weather(weather_info);
+                    info!("Initial weather data loaded");
                 }
                 Err(e) => {
-                    info!("Weather fetch error: {:?}", e);
+                    info!("Initial weather fetch failed: {:?}", e);
                 }
             }
-        });
+        }
+        
+        // Set up periodic weather updates
+        let ui_weak_weather = ui_weak.clone();
+        let weather_timer = slint::Timer::default();
+        
+        weather_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_secs(30),
+            move || {
+                info!("Timer triggered - fetching weather...");
+                match fetch_weather_simple() {
+                    Ok((temp, humidity, wind)) => {
+                        let weather_info = WeatherInfo {
+                            temperature: temp as f32,
+                            humidity: humidity as f32,
+                            wind_speed: wind as f32,
+                        };
+                        ui_weak_weather.unwrap().set_weather(weather_info);
+                        info!("Weather updated via timer");
+                    }
+                    Err(e) => {
+                        info!("Weather fetch error: {:?}", e);
+                    }
+                }
+            },
+        );
         
         // Run the UI
         self.ui.run().map_err(|e| anyhow::anyhow!(e))
@@ -181,8 +196,6 @@ impl App {
 }
 
 fn main() -> anyhow::Result<()> {
-    // It is necessary to call this function once. Otherwise some patches to the runtime
-    // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_svc::sys::link_patches();
 
     // Bind the log crate to the ESP Logging facilities
