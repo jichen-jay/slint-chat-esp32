@@ -4441,6 +4441,8 @@ dependencies = [
  "log",
  "num-traits",
  "portable-atomic",
+ "serde",
+ "serde_json",
  "slint",
  "slint-build",
  "slint-workshop-model",

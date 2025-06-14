@@ -46,9 +46,9 @@ embedded-hal = { version = "1.0" }
 
 portable-atomic = { version = "1", features = ["float"] }
 
-# Remove touch dependencies since we don't need them for now
-# sitronix-touch = { version = "0.0.1" }
-# embedded-hal-bus = { version = "0.3.0", features = ["alloc"] }
+# Add serde_json for JSON parsing
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 slint-workshop-model = { path = "../model" }
 

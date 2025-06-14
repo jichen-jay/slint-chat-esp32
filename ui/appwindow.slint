@@ -1,22 +1,164 @@
+import { Button, VerticalBox, HorizontalBox, ListView, ScrollView } from "std-widgets.slint";
 
-/// The Base class is imported as Window from widgets.slint.
-import { AppWindow } from "widgets.slint";
+export struct WifiNetwork {
+    ssid: string,
+}
 
-import { Switch, TabWidget, AboutSlint } from "std-widgets.slint";
-import { WifiNetworkPage } from "pages.slint";
+export struct WeatherInfo {
+    temperature: float,
+    humidity: float,
+    wind_speed: float,
+}
 
-import { WifiNetwork } from "viewmodel.slint";
+export component MainWindow inherits Window {
+    title: "ESP32 Weather & WiFi";
+    width: 240px;
+    height: 240px;
+    background: #1a1a1a;
+    in-out property <WeatherInfo> weather: { temperature: 0.0, humidity: 0.0, wind_speed: 0.0 };
+    in-out property <[WifiNetwork]> wifi_networks: [];
+    callback fetch_weather();
+    callback scan_wifi();
+    VerticalBox {
+        padding: 5px;
+        spacing: 5px;
+        Rectangle {
+            background: #2a2a2a;
+            border-radius: 5px;
+            height: 100px;
+            VerticalBox {
+                padding: 5px;
+                spacing: 3px;
+                Text {
+                    text: "Weather in Kitchener";
+                    font-size: 14px;
+                    color: #ffffff;
+                    horizontal-alignment: center;
+                    font-weight: 600;
+                }
 
-export component MainWindow inherits AppWindow {
-    TabWidget {
-        Tab {
-            title: @tr("Wifi");
+                HorizontalBox {
+                    spacing: 10px;
+                    alignment: center;
+                    VerticalBox {
+                        Text {
+                            text: Math.round(weather.temperature * 10) / 10 + "°C";
+                            font-size: 20px;
+                            color: #4fc3f7;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Temperature";
+                            font-size: 8px;
+                            color: #888;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        width: 1px;
+                        background: #444;
+                    }
+
+                    VerticalBox {
+                        Text {
+                            text: Math.round(weather.humidity) + "%";
+                            font-size: 16px;
+                            color: #81c784;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Humidity";
+                            font-size: 8px;
+                            color: #888;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        width: 1px;
+                        background: #444;
+                    }
+
+                    VerticalBox {
+                        Text {
+                            text: Math.round(weather.wind_speed * 10) / 10 + " m/s";
+                            font-size: 12px;
+                            color: #ffb74d;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Wind";
+                            font-size: 8px;
+                            color: #888;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+
+                Button {
+                    text: "Update Weather";
+                    height: 20px;
+                    clicked => {
+                        fetch_weather();
+                    }
+                }
+            }
         }
 
-        Tab {
-            title: @tr("About");
+        Rectangle {
+            background: #2a2a2a;
+            border-radius: 5px;
+            VerticalBox {
+                padding: 5px;
+                spacing: 3px;
+                HorizontalBox {
+                    Text {
+                        text: "WiFi Networks";
+                        font-size: 12px;
+                        color: #ffffff;
+                        font-weight: 600;
+                    }
 
-            AboutSlint { }
+                    Rectangle { }
+
+                    Button {
+                        text: "Scan";
+                        width: 50px;
+                        height: 20px;
+                        clicked => {
+                            scan_wifi();
+                        }
+                    }
+                }
+
+                ScrollView {
+                    height: 60px;
+                    ListView {
+                        for network in wifi_networks: Rectangle {
+                            height: 16px;
+                            background: touch-area.has-hover ? #3a3a3a : transparent;
+                            border-radius: 3px;
+                            touch-area := TouchArea { }
+
+                            HorizontalBox {
+                                padding-left: 5px;
+                                padding-right: 5px;
+                                Text {
+                                    text: network.ssid;
+                                    font-size: 10px;
+                                    color: #e0e0e0;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

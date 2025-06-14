@@ -1,54 +1,42 @@
-/// Simple Struct for storing WiFi Network data.
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WifiNetwork {
     pub ssid: String,
 }
 
-/// A trait to provide wifi data.
-///
-/// To be implemented for each app platform.
+#[derive(Debug, Clone)]
+pub struct WeatherData {
+    pub temperature: f64,
+    pub humidity: f64,
+    pub wind_speed: f64,
+}
+
 pub trait WifiNetworkProvider {
     fn scan_wifi_networks(&self) -> Vec<WifiNetwork>;
 }
 
-pub struct Model;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[cfg(target_os = "linux")]
-impl WifiNetworkProvider for Model {
-    fn scan_wifi_networks(&self) -> Vec<WifiNetwork> {
-        String::from_utf8(
-            std::process::Command::new("nmcli")
-                .arg("-t")
-                .arg("-f")
-                .arg("SSID,BSSID,SIGNAL")
-                .arg("dev")
-                .arg("wifi")
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .unwrap()
-        .split('\n')
-        .filter_map(|s| {
-            s.split_once(":").map(|(ssid, _)| WifiNetwork {
-                ssid: ssid.to_string(),
-            })
-        })
-        .collect::<Vec<_>>()
+    #[test]
+    fn test_wifi_network() {
+        let network = WifiNetwork {
+            ssid: "TestNetwork".to_string(),
+        };
+        assert_eq!(network.ssid, "TestNetwork");
     }
-}
 
-// Dummy data
-#[cfg(not(target_os = "none"))]
-#[cfg(not(target_os = "linux"))]
-impl WifiNetworkProvider for Model {
-    fn scan_wifi_networks(&self) -> Vec<WifiNetwork> {
-        vec![
-            WifiNetwork {
-                ssid: "Wifi network A".into(),
-            },
-            WifiNetwork {
-                ssid: "Wifi network B".into(),
-            },
-        ]
+    #[test]
+    fn test_weather_data() {
+        let weather = WeatherData {
+            temperature: 20.5,
+            humidity: 65.0,
+            wind_speed: 5.2,
+        };
+        assert_eq!(weather.temperature, 20.5);
+        assert_eq!(weather.humidity, 65.0);
+        assert_eq!(weather.wind_speed, 5.2);
     }
 }
