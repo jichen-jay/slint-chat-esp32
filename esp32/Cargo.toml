@@ -33,7 +33,7 @@ num-traits = { version = "0.2.16", default-features = false, features = [
     "libm",
 ], optional = true }
 log = { version = "0.4", default-features = false }
-esp-idf-svc = { version = "0.51", default-features = false, features = [
+esp-idf-svc = { version = "0.49", default-features = false, features = [
     "std",
     "binstart",
     "alloc",
@@ -42,6 +42,9 @@ esp-idf-svc = { version = "0.51", default-features = false, features = [
     "embassy-time-driver",
     "native",
 ] }
+
+esp-idf-hal = "0.44.1"
+
 slint = { version = "1.10", default-features = false, features = [
     "compat-1-2",
     "unsafe-single-threaded",
@@ -61,5 +64,5 @@ serde = { version = "1.0", default-features = false, features = ["derive"] }
 slint-workshop-model = { path = "../model" }
 
 [build-dependencies]
-embuild = "0.33"
+embuild = { version = "=0.33.0", features = ["espidf"] }
 slint-build = { version = "1.10", features = ["sdf-fonts"] }

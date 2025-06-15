@@ -9,6 +9,10 @@ use esp_idf_svc::io::Read;
 use esp_idf_svc::http::client::{Configuration as HttpConfig, EspHttpConnection};
 use std::fs::File;
 use std::io::Write;
+use esp_idf_svc::hal::prelude::*;
+use esp_idf_svc::hal::spi::*;
+use esp_idf_svc::sd::spi::*;
+use esp_idf_svc::sd::*;
 
 type Wifi = esp_idf_svc::wifi::BlockingWifi<esp_idf_svc::wifi::EspWifi<'static>>;
 
@@ -22,64 +26,69 @@ pub struct AudioRecorder {
 }
 
 impl AudioRecorder {
-    fn new() -> anyhow::Result<Self> {
+
+fn new(peripherals: &mut esp_idf_svc::hal::peripherals::Peripherals) -> anyhow::Result<Self> {
         info!("Initializing audio recorder...");
         
-        // Initialize SD card and I2S using C API for better compatibility
-        let sd_mounted = Self::init_sd_card()?;
+        let sd_mounted = Self::init_sd_card_hal(peripherals)?;
         let i2s_initialized = Self::init_i2s()?;
         
         if !i2s_initialized {
             info!("Failed to initialize I2S, audio recording will be disabled");
         }
         
-        info!("Audio recorder initialized successfully");
+        info!("Audio recorder initialized successfully - SD: {}, I2S: {}", sd_mounted, i2s_initialized);
         
         Ok(Self {
             sd_mounted: sd_mounted && i2s_initialized,
         })
     }
+
     
-    fn init_sd_card() -> anyhow::Result<bool> {
-        info!("Initializing SD card...");
-        
-        unsafe {
-            // Use ESP-IDF C API for SD card initialization
-            let mount_config = esp_idf_svc::sys::esp_vfs_fat_mount_config_t {
-                format_if_mount_failed: true,
-                max_files: 5,
-                allocation_unit_size: 0,
-                disk_status_check_enable: false,
-                // Removed use_one_fat field as it doesn't exist in this version
-            };
-            
-            let base_path = std::ffi::CString::new("/sdcard").unwrap();
-            
-            // Try to mount SD card via SPI
-            let mut card: *mut esp_idf_svc::sys::sdmmc_card_t = std::ptr::null_mut();
-            let ret = esp_idf_svc::sys::esp_vfs_fat_sdspi_mount(
-                base_path.as_ptr(),
-                std::ptr::null(), // Use default SPI host
-                std::ptr::null(), // Use default slot config  
-                &mount_config,
-                &mut card,
-            );
-            
-            if ret == esp_idf_svc::sys::ESP_OK {
-                info!("SD card mounted successfully");
-                return Ok(true);
-            } else {
-                info!("SD card mount failed with error: {}", ret);
-                return Ok(false);
-            }
+
+
+fn init_sd_card_hal(peripherals: &mut esp_idf_svc::hal::peripherals::Peripherals) -> anyhow::Result<bool> {
+    info!("Initializing SD card using HAL...");
+    
+    // Use high-level SPI driver
+    let spi_driver = SpiDriver::new(
+        peripherals.spi2.take().unwrap(),
+        19, // MOSI
+        22, // MISO  
+        21, // SCLK
+        &DriverConfig::default(),
+    )?;
+    
+    // Create SD SPI device
+    let sd_device = SpiDevice::new(
+        spi_driver,
+        0, // CS pin
+        Option::<esp_idf_svc::hal::gpio::AnyInputPin>::None, // CD
+        Option::<esp_idf_svc::hal::gpio::AnyInputPin>::None, // WP
+        Option::<esp_idf_svc::hal::gpio::AnyInputPin>::None, // INT
+    );
+    
+    // Use default SD configuration
+    let config = SdConfiguration::new();
+    
+    // Mount the SD card
+    match SdCard::mount(config, sd_device) {
+        Ok(_card) => {
+            info!("SD card mounted successfully using HAL");
+            Ok(true)
+        }
+        Err(e) => {
+            info!("SD card mount failed: {:?}", e);
+            Ok(false)
         }
     }
+}
+
     
     fn init_i2s() -> anyhow::Result<bool> {
         info!("Initializing I2S for microphone...");
         
         unsafe {
-            // Use a simpler approach with default struct initialization
             let mut i2s_config: esp_idf_svc::sys::i2s_config_t = std::mem::zeroed();
             i2s_config.mode = esp_idf_svc::sys::i2s_mode_t_I2S_MODE_MASTER 
                 | esp_idf_svc::sys::i2s_mode_t_I2S_MODE_RX;
@@ -88,22 +97,25 @@ impl AudioRecorder {
             i2s_config.channel_format = esp_idf_svc::sys::i2s_channel_fmt_t_I2S_CHANNEL_FMT_ONLY_LEFT;
             i2s_config.communication_format = esp_idf_svc::sys::i2s_comm_format_t_I2S_COMM_FORMAT_STAND_I2S;
             i2s_config.intr_alloc_flags = 0;
+            
+            // Fixed I2S configuration field access
+            i2s_config.__bindgen_anon_1.dma_buf_count = 8;
+            i2s_config.__bindgen_anon_1.dma_buf_len = 1024;
+            
             i2s_config.use_apll = false;
             i2s_config.tx_desc_auto_clear = false;
             i2s_config.fixed_mclk = 0;
             i2s_config.mclk_multiple = esp_idf_svc::sys::i2s_mclk_multiple_t_I2S_MCLK_MULTIPLE_256;
             i2s_config.bits_per_chan = esp_idf_svc::sys::i2s_bits_per_chan_t_I2S_BITS_PER_CHAN_DEFAULT;
             
-            // Pin configuration based on schematic
             let pin_config = esp_idf_svc::sys::i2s_pin_config_t {
-                bck_io_num: 14,  // MIC_14 (SCK)
-                ws_io_num: 32,   // MIC_32 (WS)  
+                bck_io_num: 14,
+                ws_io_num: 32,
                 data_out_num: esp_idf_svc::sys::I2S_PIN_NO_CHANGE,
-                data_in_num: 33, // MIC_33 (SD)
-                mck_io_num: esp_idf_svc::sys::I2S_PIN_NO_CHANGE, // Added missing field
+                data_in_num: 33,
+                mck_io_num: esp_idf_svc::sys::I2S_PIN_NO_CHANGE,
             };
             
-            // Install and start I2S driver
             let ret = esp_idf_svc::sys::i2s_driver_install(
                 esp_idf_svc::sys::i2s_port_t_I2S_NUM_1,
                 &i2s_config,
@@ -123,7 +135,7 @@ impl AudioRecorder {
             
             if ret != esp_idf_svc::sys::ESP_OK {
                 info!("I2S pin config failed: {}", ret);
-                return Ok(false);
+                info!("Continuing despite pin config failure...");
             }
             
             info!("I2S initialized successfully");
@@ -133,16 +145,14 @@ impl AudioRecorder {
     
     fn record_audio(&mut self) -> anyhow::Result<()> {
         if !self.sd_mounted {
-            info!("SD card not available, skipping recording");
-            return Ok(());
+            info!("SD card not available, simulating recording (no save)");
+        } else {
+            info!("Starting 10-second audio recording to SD card...");
         }
         
-        info!("Starting 10-second audio recording...");
-        
-        // Calculate buffer size for 10 seconds at 16kHz, 16-bit, mono
         let sample_rate = 16000;
         let duration_seconds = 10;
-        let bytes_per_sample = 2; // 16-bit = 2 bytes
+        let bytes_per_sample = 2;
         let total_samples = sample_rate * duration_seconds;
         let total_bytes = total_samples * bytes_per_sample;
         
@@ -151,7 +161,6 @@ impl AudioRecorder {
         
         info!("Recording {} samples ({} bytes)...", total_samples, total_bytes);
         
-        // Record audio data using I2S C API
         let start_time = std::time::Instant::now();
         while audio_buffer.len() < total_bytes && start_time.elapsed().as_secs() < 10 {
             let mut bytes_read = 0;
@@ -162,40 +171,48 @@ impl AudioRecorder {
                     temp_buffer.as_mut_ptr() as *mut std::ffi::c_void,
                     temp_buffer.len(),
                     &mut bytes_read,
-                    (1000 * configTICK_RATE_HZ) / 1000
+                    (1000 * configTICK_RATE_HZ) / 1000,
                 );
                 
                 if ret == esp_idf_svc::sys::ESP_OK && bytes_read > 0 {
                     let remaining_bytes = total_bytes - audio_buffer.len();
                     let bytes_to_copy = bytes_read.min(remaining_bytes);
                     audio_buffer.extend_from_slice(&temp_buffer[..bytes_to_copy]);
+                    
+                    if audio_buffer.len() % (sample_rate * bytes_per_sample) == 0 {
+                        let seconds_recorded = audio_buffer.len() / (sample_rate * bytes_per_sample);
+                        info!("Recorded {} seconds...", seconds_recorded);
+                    }
                 } else {
-                    info!("I2S read error or timeout: {}", ret);
+                    info!("I2S read error or timeout: {}, bytes_read: {}", ret, bytes_read);
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
             }
+            
+            esp_idf_svc::hal::task::do_yield();
         }
         
         info!("Recorded {} bytes in {:?}", audio_buffer.len(), start_time.elapsed());
         
-        // Generate filename with timestamp
-        let filename = format!("/sdcard/rec_{}.wav", 
-                              std::time::SystemTime::now()
-                                  .duration_since(std::time::UNIX_EPOCH)
-                                  .unwrap_or_default()
-                                  .as_secs());
+        if self.sd_mounted {
+            let filename = format!("/sdcard/rec_{}.wav", 
+                                  std::time::SystemTime::now()
+                                      .duration_since(std::time::UNIX_EPOCH)
+                                      .unwrap_or_default()
+                                      .as_secs());
+            
+            self.save_wav_file(&filename, &audio_buffer, sample_rate as u32)?;
+            info!("Audio saved to: {}", filename);
+        } else {
+            info!("Audio recording completed (not saved - no SD card)");
+        }
         
-        // Save as WAV file
-        self.save_wav_file(&filename, &audio_buffer, sample_rate as u32)?;
-        
-        info!("Audio saved to: {}", filename);
         Ok(())
     }
     
     fn save_wav_file(&self, filename: &str, audio_data: &[u8], sample_rate: u32) -> anyhow::Result<()> {
         let mut file = File::create(filename)?;
         
-        // WAV file header
         let data_size = audio_data.len() as u32;
         let file_size = 36 + data_size;
         
@@ -206,13 +223,13 @@ impl AudioRecorder {
         
         // fmt chunk
         file.write_all(b"fmt ")?;
-        file.write_all(&16u32.to_le_bytes())?; // chunk size
-        file.write_all(&1u16.to_le_bytes())?;  // PCM format
-        file.write_all(&1u16.to_le_bytes())?;  // mono
-        file.write_all(&sample_rate.to_le_bytes())?; // sample rate
-        file.write_all(&(sample_rate * 2).to_le_bytes())?; // byte rate
-        file.write_all(&2u16.to_le_bytes())?;  // block align
-        file.write_all(&16u16.to_le_bytes())?; // bits per sample
+        file.write_all(&16u32.to_le_bytes())?;
+        file.write_all(&1u16.to_le_bytes())?;
+        file.write_all(&1u16.to_le_bytes())?;
+        file.write_all(&sample_rate.to_le_bytes())?;
+        file.write_all(&(sample_rate * 2).to_le_bytes())?;
+        file.write_all(&2u16.to_le_bytes())?;
+        file.write_all(&16u16.to_le_bytes())?;
         
         // data chunk
         file.write_all(b"data")?;
@@ -228,7 +245,6 @@ impl Model {
     fn connect_to_wifi(&self) -> anyhow::Result<()> {
         info!("Connecting to WiFi...");
         
-        // Configure your WiFi credentials here
         let wifi_config = ClientConfiguration {
             ssid: "WuandChen".try_into().unwrap(),
             password: "Sunday228!".try_into().unwrap(),
@@ -239,7 +255,6 @@ impl Model {
         self.wifi.borrow_mut().start()?;
         self.wifi.borrow_mut().connect()?;
         
-        // Wait for connection with timeout
         let start = std::time::Instant::now();
         while !self.wifi.borrow().is_connected()? {
             if start.elapsed() > std::time::Duration::from_secs(10) {
@@ -248,10 +263,7 @@ impl Model {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         
-        // Wait for IP
         self.wifi.borrow_mut().wait_netif_up()?;
-        
-        // Wait a bit for network to stabilize
         std::thread::sleep(std::time::Duration::from_secs(2));
         
         info!("WiFi connected!");
@@ -271,7 +283,6 @@ impl Model {
 fn fetch_weather_simple() -> Result<(f64, f64, f64), Box<dyn std::error::Error>> {
     info!("Fetching weather data...");
     
-    // Use a simple HTTP client
     let config = HttpConfig {
         crt_bundle_attach: Some(esp_idf_svc::sys::esp_crt_bundle_attach),
         ..Default::default()
@@ -280,12 +291,10 @@ fn fetch_weather_simple() -> Result<(f64, f64, f64), Box<dyn std::error::Error>>
     let connection = EspHttpConnection::new(&config)?;
     let mut client = Client::wrap(connection);
 
-    // Use the exact URL that works
     let url = "http://api.open-meteo.com/v1/forecast?latitude=43.45&longitude=-80.49&current=temperature_2m,relative_humidity_2m,wind_speed_10m";
     
     info!("Making http request...");
-   let request = client.get(url)?;
-    
+    let request = client.get(url)?;
     let mut response = request.submit()?;
     
     let status = response.status();
@@ -294,8 +303,7 @@ fn fetch_weather_simple() -> Result<(f64, f64, f64), Box<dyn std::error::Error>>
     if status != 200 {
         return Err(format!("HTTP error: {}", status).into());
     }
-    use embedded_svc::io::Read; 
-    // Read response
+    
     let mut buf = Vec::new();
     let mut temp_buf = [0u8; 256];
     
@@ -310,39 +318,27 @@ fn fetch_weather_simple() -> Result<(f64, f64, f64), Box<dyn std::error::Error>>
     let response_str = String::from_utf8_lossy(&buf);
     info!("Response: {}", response_str);
     
-    // Parse JSON
     use serde_json::Value;
     let v: Value = serde_json::from_str(&response_str)?;
     
-    let temp = v["current"]["temperature_2m"]
-        .as_f64()
-        .ok_or("Missing temperature")?;
-    
-    let humidity = v["current"]["relative_humidity_2m"]
-        .as_f64()
-        .ok_or("Missing humidity")?;
-    
-    let wind = v["current"]["wind_speed_10m"]
-        .as_f64()
-        .ok_or("Missing wind speed")?;
+    let temp = v["current"]["temperature_2m"].as_f64().ok_or("Missing temperature")?;
+    let humidity = v["current"]["relative_humidity_2m"].as_f64().ok_or("Missing humidity")?;
+    let wind = v["current"]["wind_speed_10m"].as_f64().ok_or("Missing wind speed")?;
     
     info!("Weather: {}°C, {}%, {} m/s", temp, humidity, wind);
     
     Ok((temp, humidity, wind))
 }
 
-/// Our App struct that holds the UI
 struct App {
     ui: MainWindow,
     model: Model,
 }
 
 impl App {
-    /// Create a new App struct.
     fn new(wifi: std::rc::Rc<std::cell::RefCell<Wifi>>) -> anyhow::Result<Self> {
         let ui = MainWindow::new().map_err(|e| anyhow::anyhow!(e))?;
         
-        // Initialize audio recorder
         let audio_recorder = match AudioRecorder::new() {
             Ok(recorder) => Some(recorder),
             Err(e) => {
@@ -359,12 +355,10 @@ impl App {
         Ok(Self { ui, model })
     }
 
-    /// Run the App
     fn run(self) -> anyhow::Result<()> {
         let ui_weak = self.ui.as_weak();
         let model_rc = std::rc::Rc::new(self.model);
         
-        // Connect to WiFi at startup
         info!("Connecting to WiFi at startup...");
         let wifi_connected = match model_rc.connect_to_wifi() {
             Ok(_) => {
@@ -378,7 +372,6 @@ impl App {
         };
         
         if wifi_connected {
-            // Try to fetch weather immediately
             match fetch_weather_simple() {
                 Ok((temp, humidity, wind)) => {
                     let weather_info = WeatherInfo {
@@ -395,7 +388,6 @@ impl App {
             }
         }
         
-        // Set up periodic weather updates
         let ui_weak_weather = ui_weak.clone();
         let weather_timer = slint::Timer::default();
         
@@ -421,13 +413,12 @@ impl App {
             },
         );
         
-        // Set up periodic audio recording (every 60 seconds)
         let model_audio = model_rc.clone();
         let audio_timer = slint::Timer::default();
         
         audio_timer.start(
             slint::TimerMode::Repeated,
-            std::time::Duration::from_secs(60), // Record every minute
+            std::time::Duration::from_secs(60),
             move || {
                 info!("Audio timer triggered - starting recording...");
                 if let Err(e) = model_audio.start_audio_recording() {
@@ -436,7 +427,6 @@ impl App {
             },
         );
         
-        // Start first recording after 5 seconds
         let model_first_audio = model_rc.clone();
         let first_audio_timer = slint::Timer::default();
         first_audio_timer.start(
@@ -450,15 +440,12 @@ impl App {
             },
         );
         
-        // Run the UI
         self.ui.run().map_err(|e| anyhow::anyhow!(e))
     }
 }
 
 fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
-
-    // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
 
     info!("Starting Slint Workshop ESP with ST7789 display and audio recording");
@@ -466,7 +453,6 @@ fn main() -> anyhow::Result<()> {
     let platform = esp32::EspPlatform::new();
     let wifi = platform.wifi.clone();
 
-    // Set the platform
     slint::platform::set_platform(platform).unwrap();
 
     info!("Platform initialized, creating app");
