@@ -1,0 +1,21 @@
+MSM261S4030H0R (IIS Protocol) - V1.0-V1.1
+The MSM261S4030H0R microphone uses the IIS (Inter-IC Sound) bus protocol and is supported through esp-idf-hal's I2S interface. While there isn't a specific Rust driver crate for this particular microphone chip, you can configure the generic I2S interface to communicate with it.
+
+Implementation approach:
+
+Use esp-idf-hal crate's I2S driver configured for IIS mode
+
+Configure for right channel by default (as per hardware design)
+
+Manual resistor adjustments required according to T-CameraPlus-S3 schematic for channel configuration changes
+
+MP34DT05-A (PDM Protocol) - V1.2
+The MP34DT05-A microphone uses PDM (Pulse Density Modulation) protocol and has better Rust support through esp-idf-hal's I2S interface configured specifically for PDM mode.
+
+Implementation approach:
+
+Use esp-idf-hal crate's I2S interface configured for PDM mode
+
+PDM microphones like MP34DT05-A are directly supported via this configuration
+
+Default right channel configuration with hardware resistor adjustment capability

@@ -33,7 +33,15 @@ num-traits = { version = "0.2.16", default-features = false, features = [
     "libm",
 ], optional = true }
 log = { version = "0.4", default-features = false }
-esp-idf-svc = { version = "0.51", default-features = false }
+esp-idf-svc = { version = "0.51", default-features = false, features = [
+    "std",
+    "binstart",
+    "alloc",
+    "embassy-sync",
+    "critical-section",
+    "embassy-time-driver",
+    "native",
+] }
 slint = { version = "1.10", default-features = false, features = [
     "compat-1-2",
     "unsafe-single-threaded",
