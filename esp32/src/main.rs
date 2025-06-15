@@ -1,7 +1,7 @@
 mod esp32;
 
 slint::include_modules!();
-
+use esp_idf_svc::sys::configTICK_RATE_HZ;
 use log::info;
 use esp_idf_svc::wifi::ClientConfiguration;
 use embedded_svc::http::client::Client;
@@ -50,7 +50,7 @@ impl AudioRecorder {
                 max_files: 5,
                 allocation_unit_size: 0,
                 disk_status_check_enable: false,
-                use_one_fat: false,
+                // Removed use_one_fat field as it doesn't exist in this version
             };
             
             let base_path = std::ffi::CString::new("/sdcard").unwrap();
@@ -79,23 +79,20 @@ impl AudioRecorder {
         info!("Initializing I2S for microphone...");
         
         unsafe {
-            // Configure I2S for recording from MSM261S4030H0 microphone
-            let i2s_config = esp_idf_svc::sys::i2s_config_t {
-                mode: esp_idf_svc::sys::i2s_mode_t_I2S_MODE_MASTER 
-                    | esp_idf_svc::sys::i2s_mode_t_I2S_MODE_RX,
-                sample_rate: 16000,
-                bits_per_sample: esp_idf_svc::sys::i2s_bits_per_sample_t_I2S_BITS_PER_SAMPLE_16BIT,
-                channel_format: esp_idf_svc::sys::i2s_channel_fmt_t_I2S_CHANNEL_FMT_ONLY_LEFT,
-                communication_format: esp_idf_svc::sys::i2s_comm_format_t_I2S_COMM_FORMAT_STAND_I2S,
-                intr_alloc_flags: 0,
-                dma_buf_count: 4,
-                dma_buf_len: 1024,
-                use_apll: false,
-                tx_desc_auto_clear: false,
-                fixed_mclk: 0,
-                mclk_multiple: esp_idf_svc::sys::i2s_mclk_multiple_t_I2S_MCLK_MULTIPLE_256,
-                bits_per_chan: esp_idf_svc::sys::i2s_bits_per_chan_t_I2S_BITS_PER_CHAN_DEFAULT,
-            };
+            // Use a simpler approach with default struct initialization
+            let mut i2s_config: esp_idf_svc::sys::i2s_config_t = std::mem::zeroed();
+            i2s_config.mode = esp_idf_svc::sys::i2s_mode_t_I2S_MODE_MASTER 
+                | esp_idf_svc::sys::i2s_mode_t_I2S_MODE_RX;
+            i2s_config.sample_rate = 16000;
+            i2s_config.bits_per_sample = esp_idf_svc::sys::i2s_bits_per_sample_t_I2S_BITS_PER_SAMPLE_16BIT;
+            i2s_config.channel_format = esp_idf_svc::sys::i2s_channel_fmt_t_I2S_CHANNEL_FMT_ONLY_LEFT;
+            i2s_config.communication_format = esp_idf_svc::sys::i2s_comm_format_t_I2S_COMM_FORMAT_STAND_I2S;
+            i2s_config.intr_alloc_flags = 0;
+            i2s_config.use_apll = false;
+            i2s_config.tx_desc_auto_clear = false;
+            i2s_config.fixed_mclk = 0;
+            i2s_config.mclk_multiple = esp_idf_svc::sys::i2s_mclk_multiple_t_I2S_MCLK_MULTIPLE_256;
+            i2s_config.bits_per_chan = esp_idf_svc::sys::i2s_bits_per_chan_t_I2S_BITS_PER_CHAN_DEFAULT;
             
             // Pin configuration based on schematic
             let pin_config = esp_idf_svc::sys::i2s_pin_config_t {
@@ -103,6 +100,7 @@ impl AudioRecorder {
                 ws_io_num: 32,   // MIC_32 (WS)  
                 data_out_num: esp_idf_svc::sys::I2S_PIN_NO_CHANGE,
                 data_in_num: 33, // MIC_33 (SD)
+                mck_io_num: esp_idf_svc::sys::I2S_PIN_NO_CHANGE, // Added missing field
             };
             
             // Install and start I2S driver
@@ -164,7 +162,7 @@ impl AudioRecorder {
                     temp_buffer.as_mut_ptr() as *mut std::ffi::c_void,
                     temp_buffer.len(),
                     &mut bytes_read,
-                    1000 / esp_idf_svc::sys::portTICK_PERIOD_MS, // 1 second timeout
+                    (1000 * configTICK_RATE_HZ) / 1000
                 );
                 
                 if ret == esp_idf_svc::sys::ESP_OK && bytes_read > 0 {

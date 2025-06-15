@@ -6,7 +6,6 @@
 
 // I2S bindings for audio recording
 #include <driver/i2s.h>
-#include <driver/i2s_std.h>
 
 // SD card and file system bindings
 #include <esp_vfs_fat.h>
